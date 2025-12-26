@@ -1,0 +1,517 @@
+# ZTE Router Log Classification Coverage
+
+
+## 1. DHCP (Dynamic Host Configuration Protocol)
+
+### What it is
+Your router assigns IP addresses to devices on your network. DHCP manages this entire process.
+
+### Subsystem: `dhcp`
+
+#### Event Types:
+- **`request`** - A device is asking for an IP address
+  - Example: Phone connects to WiFi, sends DHCPREQUEST
+  - Contains: MAC address, requested IP, message type
+
+- **`response`** - Router grants or denies the IP
+  - Example: Router sends DHCPACK with IP 192.168.1.20, lease time 86400s
+  - Contains: Assigned IP, lease duration, MAC address
+
+- **`query`** - Router looking up existing DHCP records
+  - Example: "record not find, function Dhcps Get Query Record, ip [192.168.1.20]"
+  - Happens when checking if an IP is already assigned
+
+- **`ipv6_request`** - DHCPv6 request for IPv6 address
+  - Example: Device requesting IPv6 via DHCPv6
+  - Contains: DUID (device identifier), link-local address
+
+- **`ipv6_response`** - Router responds with IPv6 assignment
+  - Example: Router sends DHCPv6 REPLY message
+
+### Why it matters
+- **Device tracking**: See when devices join/leave network
+- **IP conflicts**: Detect when multiple devices want same IP
+- **Lease exhaustion**: Know if you're running out of available IPs
+- **Device behavior**: Identify sleep/wake cycles, MAC randomization
+- **Network health**: Excessive DHCP churn indicates instability
+
+---
+
+## 2. IPv6 / SLAAC (Stateless Address Autoconfiguration)
+
+### What it is
+IPv6 has two ways to get addresses: DHCPv6 (above) and SLAAC. SLAAC is automatic - devices generate their own IPv6 addresses from the router's prefix.
+
+### Subsystem: `ipv6`
+
+#### Event Types:
+- **`slaac_error`** - IPv6 autoconfiguration failed
+  - Example: "function failed!slaacFindByIFName, IFName:br0"
+  - Example: "dns not OK, but M=0, O=0, in this situation, not send inform-request"
+
+### Why it matters
+- **ISP IPv6 support**: These errors mean your ISP isn't providing IPv6 prefix delegation
+- **Extremely common in India**: Most Indian ISPs don't support IPv6 properly
+- **Not critical**: Your network still works fine on IPv4
+- **Firmware noise**: Router keeps retrying periodically
+
+### What the errors mean
+- `slaacFindByIFName` = Router can't find IPv6 config for the bridge interface
+- `dns not OK, but M=0, O=0` = No DNS servers via IPv6, and router flags say "don't use DHCPv6"
+- This is a config mismatch between WAN (no IPv6) and LAN (expecting IPv6)
+
+---
+
+## 3. WiFi - Client Management
+
+### What it is
+Your router actively manages WiFi clients - deciding which band (2.4GHz vs 5GHz) they should use, when to disconnect them, and tracking their associations.
+
+### Subsystem: `wifi`
+
+#### Event Types:
+
+- **`client_kickoff`** - Router forcing a client to disconnect
+  - Example: "kickoff sta:b8:db:38:5b:30:ca"
+  - **Why**: Band steering - router wants client to move from 2.4GHz to 5GHz or vice versa
+  - **When**: Client has weak signal, better band available, or load balancing
+  - Contains: Client MAC address
+
+- **`btm_report`** - Band Transition Management report
+  - Example: "BTM REPORT: sta[...] src[...] dst[...] status[7]"
+  - **What**: IEEE 802.11v standard for smart roaming
+  - **Meaning**: Router suggested client move to different access point/band
+  - Status code 7 = Client rejected the suggestion
+
+- **`sta_report`** - Station (client) association/disassociation reports
+  - Example: "STA LEAVE REPORT: sta does not associate with [12:10:81:dd:c3:6c]"
+  - Example: "can't find sta ca:e3:89:9d:9c:cb"
+  - **What**: Tracking when clients connect/disconnect
+  - **Why**: Router needs to know which clients are on which radio
+
+- **`association`** - Client connecting to access point
+  - Example: "TOPOLOGY NOTIFY: sta [ee:b8:30:b5:b6:e9] associate with [10:10:81:fd:c3:6a]"
+  - **What**: Successful WiFi association
+  - Contains: Client MAC, AP MAC (BSSID)
+
+- **`roaming`** - Client moving between bands/APs
+  - Example: "ROAM INFO sta [...] srcap ===> dstap"
+  - **What**: Client switching from one radio to another (2.4GHz ↔ 5GHz)
+
+- **`topology`** - General WiFi network topology changes
+
+- **`client`** - General client management
+  - Example: WiFi capabilities, rates, band support
+  - Contains: VHT (802.11ac) info, channel width, modulation schemes
+
+### Why it matters
+- **Signal quality**: Frequent kickoffs = poor coverage or interference
+- **Roaming behavior**: See if devices stick to wrong band (sticky client problem)
+- **Band steering effectiveness**: Is your router successfully moving clients to 5GHz?
+- **Device compatibility**: Some devices reject BTM suggestions (older phones/IoT)
+- **Network optimization**: Identify which clients cause problems
+
+### Real-world insights from your logs
+- You have clients being kicked off frequently (b8:db:38:5b:30:ca, 0e:be:14:ad:60:a6)
+- Status 7 (rejection) is common - devices ignoring router's band steering
+- Lots of STA LEAVE reports = unstable connections or aggressive band steering
+
+---
+
+## 4. WAN / PPP (Wide Area Network / Point-to-Point Protocol)
+
+### What it is
+Your internet connection. PPPoE (PPP over Ethernet) is how most fiber/DSL ISPs in India authenticate and connect you.
+
+### Subsystem: `wan`
+
+#### Event Types:
+
+- **`ppp_auth`** - ISP authentication
+  - Example: "PPP Authentication success"
+  - **What**: Router logged into ISP using username/password
+
+- **`ppp_link_up`** - Connection established
+  - Example: "PPP IPCP up" or "PPP IPV6CP up"
+  - **What**: IP layer is now active (IPv4 or IPv6)
+  - IPCP = Internet Protocol Control Protocol
+  - IPV6CP = IPv6 Control Protocol
+
+- **`session_start`** - Session initialized with IP assignment
+  - Example: "local/remote IP: 100.x.x.x / 10.x.x.x"
+  - Contains: Your public IP (CGNAT), ISP's gateway IP
+
+- **`connection`** - General WAN events
+  - Connect time, disconnections, errors
+
+### Why it matters
+- **Internet uptime**: Track when connection drops
+- **ISP quality**: Frequent reconnects = ISP issues
+- **CGNAT detection**: If your IP is 100.x.x.x, you're behind Carrier-Grade NAT
+- **Connection problems**: See authentication failures, timeout patterns
+
+### What CGNAT means
+- Your public IP is shared with other customers
+- Makes port forwarding impossible without ISP help
+- Common in India due to IPv4 address exhaustion
+
+---
+
+## 5. Authentication (Web UI Access)
+
+### What it is
+Logs of who's logging into your router's web interface.
+
+### Subsystem: `auth`
+
+#### Event Types:
+
+- **`login`** - Successful login
+  - Example: "192.168.1.20 -- xxx: login success"
+  - Contains: Source IP, username
+
+- **`logout`** - User logged out
+  - Example: "192.168.1.20--xxx:logout success"
+
+- **`session`** - General authentication events
+  - Example: "Web user (username == xxx) is authenticated ok"
+
+### Why it matters
+- **Security monitoring**: See unauthorized access attempts
+- **Activity tracking**: Know when you or others accessed router
+- **Forensics**: If settings change, see who logged in when
+
+---
+
+## 6. System - Timeouts
+
+### What it is
+Internal protocol communication timeouts between router components.
+
+### Subsystem: `system`
+### Event Type: `timeout`
+
+#### Examples:
+- "resp timeout: u16MsgType=0x800e, u16MsgId=0x2445"
+
+### Why it matters
+- **System health**: Excessive timeouts = overloaded router or hardware issues
+- **Performance indicator**: Shows internal delays in message processing
+- **Usually benign**: Occasional timeouts are normal
+- **Pattern matters**: Frequent timeouts during specific activities indicate bottlenecks
+
+### What the hex codes mean
+- `u16MsgType` = Internal message type identifier
+- `u16MsgId` = Specific message instance
+- These are ZTE firmware internal protocols, not documented publicly
+
+---
+
+## 7. System - Process Control
+
+### What it is
+Router managing its internal processes/daemons.
+
+### Subsystem: `system`
+### Event Type: `process_control`
+
+#### Examples:
+- "PcStopProgram[pid1276] Result = -2 failed!!!"
+- "call PcStopProgram failed!pid 1276"
+- "call get_ap_list Nok, iRet=1"
+- "call GetTagParam failed!!!"
+
+### Why it matters
+- **Daemon health**: Shows when internal services crash or restart
+- **Stability indicator**: Frequent failures = firmware issues
+- **Debug info**: Helps understand what broke when router misbehaves
+
+---
+
+## 8. System - Internal Management Framework
+
+### What it is
+ZTE's internal management system - handles configuration, monitoring, and inter-process communication.
+
+### Subsystem: `system`
+### Event Type: `internal`
+
+#### Examples:
+- "RunPCB process[cJson_mgr] Event[0xaf01] RunTicks[304]"
+- "CMAPI_OBJ_SRM_GET_TR181_CPUMEMINFO"
+
+### Why it matters
+- **System monitoring**: Router is checking CPU/memory usage
+- **Health polling**: Periodic checks that everything is working
+- **TR-181 data model**: Industry standard for device management
+- **Performance**: RunTicks shows how long operations take
+
+### What TR-181 is
+- Standardized data model for home routers
+- Used by ISPs for remote management
+- Defines parameters like Device.WiFi.SSID, Device.IP.Interface, etc.
+
+---
+
+## 9. System - Factory Test / Timer Events
+
+### Subsystem: `system`
+### Event Type: `factory_test`
+
+#### Examples:
+- "**Timer7Event factorytest Start **"
+
+### Why it matters
+- **Manufacturing leftovers**: Factory test code still present in production firmware
+- **Usually harmless**: Triggered by specific timers but does nothing
+- **Firmware quality indicator**: Shows incomplete production cleanup
+
+---
+
+## 10. System - Configuration Errors
+
+### What it is
+Router failing to read/write configuration parameters.
+
+### Subsystem: `system`
+### Event Type: `config_error`
+
+#### Examples:
+- "get view failed VID(ScheduleInform) VN(DEV.ScheduleInform1) Err(-5)"
+- "parameter is NULL!"
+- "interface is not found. (objname: OBJ_UPLINK_CONF_ID)"
+
+### Why it matters
+- **Config integrity**: Shows missing or corrupted configuration
+- **ISP customization**: Some ISP-specific features might be misconfigured
+- **Non-critical**: Router continues working with defaults
+
+### What the codes mean
+- VID = View ID (configuration namespace)
+- VN = View Name (specific parameter)
+- Err(-5) = Error code (typically "not found")
+
+---
+
+## 11. System - IPC (Inter-Process Communication) Errors
+
+### What it is
+Router's internal processes failing to communicate with each other.
+
+### Subsystem: `system`
+### Event Type: `ipc_error`
+
+#### Examples:
+- "Adaptor interface is not found. (objname: OBJ_UPLINK_CONF_ID)"
+- "iRetId(105) is not found in g_tCmRetHead"
+
+### Why it matters
+- **Architecture issue**: Shows communication breakdown between daemons
+- **Firmware bugs**: These are typically ZTE firmware implementation issues
+- **Impact varies**: Might be cosmetic or cause real functionality problems
+
+---
+
+## 12. System - Device Manager
+
+### Subsystem: `system`
+### Event Type: `device_mgr`
+
+#### Examples:
+- "success get Dev PhyPort from dev_mgr,but PhyPort is []"
+
+### Why it matters
+- **Hardware abstraction**: Device manager handles physical port mapping
+- **Empty results**: Shows router querying hardware but getting no results
+- **Usually benign**: Information query that returned nothing
+
+---
+
+## 13. Network - Configuration Errors
+
+### What it is
+Problems with network interface configuration, especially the bridge interface (br0).
+
+### Subsystem: `network`
+### Event Type: `config_error`
+
+#### Examples:
+- "can't be same with br0"
+- "message repeated 2 times: [ kickoff sta:b8:db:38:5b:30:ca]"
+
+### Why it matters
+- **Bridge issues**: br0 is the main LAN bridge connecting WiFi and Ethernet
+- **Configuration conflicts**: Something trying to use same config as bridge
+- **Repeated messages**: rsyslog suppresses duplicates, shows count
+
+### What br0 is
+- Virtual network bridge connecting all LAN interfaces
+- Combines WiFi (wlan0, wlan1) + Ethernet (eth0.1, eth0.2, etc.)
+- All LAN devices are logically on same network via this bridge
+
+---
+
+## 14. System - Boot / Reboot
+
+### What it is
+Router starting up, shutting down, or restarting.
+
+### Subsystem: `system`
+### Event Type: `boot`
+
+#### Examples:
+- "The system will reboot"
+- "reboot msg!reboot for media (1)"
+- "fzj_debug Rcv the dev_mgr reboot msg!"
+- "SSEND [0X9B02] to [],wMsgLen[256],parameter invalid!"
+
+### Why it matters
+- **Uptime tracking**: Know when router restarts
+- **Crash detection**: Unexpected reboots indicate problems
+- **ISP updates**: Some reboots are triggered by ISP firmware pushes
+- **Power issues**: Frequent reboots might indicate power problems
+
+---
+
+## 15. TR-069 / CWMP (ISP Remote Management)
+
+### What it is
+Protocol that lets your ISP remotely manage your router. TR-069 (Technical Report 069) / CWMP (CPE WAN Management Protocol).
+
+### Subsystem: `tr069`
+### Event Type: `management`
+
+#### Examples:
+- "get view failed VID(ScheduleInform)"
+- "CWMP Inform sent to ACS"
+
+### Why it matters
+- **ISP control**: Your ISP can change settings, update firmware remotely
+- **Auto-configuration**: ISP provisions VoIP, IPTV settings automatically
+- **Privacy concern**: ISP can see detailed router info
+- **Firmware updates**: This is how ISP pushes new firmware
+
+### What ACS is
+- Auto Configuration Server
+- ISP's management server
+- Your router periodically "informs" ACS it's alive
+- ACS can push commands back
+
+---
+
+## 16. Firewall / Security
+
+### What it is
+Netfilter/iptables firewall logs - blocked/rejected packets.
+
+### Subsystem: `security`
+### Event Type: `firewall`
+
+#### Examples:
+- "DROP IN=ppp0 SRC=1.2.3.4 DST=..."
+- "REJECT port scan detected"
+
+### Why it matters
+- **Attack detection**: See port scans, intrusion attempts
+- **Leak detection**: Identify unexpected outbound connections
+- **Policy enforcement**: Verify firewall rules working
+- **Often disabled**: Many routers don't log this by default (too verbose)
+
+---
+
+## 17. DNS (Domain Name System)
+
+### What it is
+DNS queries and responses - translating domain names to IP addresses.
+
+### Subsystem: `dns`
+### Event Type: `query`
+
+#### Examples:
+- "dnsmasq query google.com"
+- "DNS resolution failed for example.com"
+
+### Why it matters
+- **Privacy**: See what domains devices are accessing
+- **Blocking**: Identify ad/malware domains
+- **Performance**: DNS failures cause slow internet
+- **Rarely logged**: Usually requires explicit DNS logging configuration
+
+---
+
+## 18. QoS (Quality of Service)
+
+### What it is
+Traffic prioritization and bandwidth management.
+
+### Subsystem: `qos`
+### Event Type: `traffic`
+
+#### Examples:
+- "QoS rule matched class=video"
+- "bandwidth limit reached for device X"
+
+### Why it matters
+- **Performance tuning**: See if QoS rules are working
+- **Gaming/streaming**: Verify priority traffic gets bandwidth
+- **Bandwidth hogs**: Identify heavy users
+- **Usually silent**: Most routers don't log QoS decisions
+
+---
+
+## 19. USB / Storage
+
+### What it is
+USB devices connected to router - modems, storage, printers.
+
+### Subsystem: `usb`
+### Event Type: `device`
+
+#### Examples:
+- "usb 1-1: new high-speed USB device"
+- "storage device mounted at /mnt/usb"
+
+### Why it matters
+- **Device detection**: See when USB devices connect
+- **Storage sharing**: File server functionality
+- **Backup tracking**: If using USB for backups
+- **4G/5G modems**: Some routers support USB dongles for failover
+
+---
+
+## 20. VoIP / SIP (Voice over IP)
+
+### What it is
+Internet telephony - if your router supports phone service.
+
+### Subsystem: `voip`
+### Event Type: `call`
+
+#### Examples:
+- "SIP REGISTER success"
+- "call initiated to +91xxxxxxxxxx"
+
+### Why it matters
+- **Call tracking**: See when calls made/received
+- **Registration**: VoIP phone must register with ISP server
+- **Quality issues**: Failed registrations = no dial tone
+- **ISP-dependent**: Only if ISP provides VoIP service
+
+---
+
+## 21. LAN (Local Area Network)
+
+### What it is
+Local network events - Ethernet ports, bridge operations.
+
+### Subsystem: `lan`
+### Event Type: `network`
+
+#### Examples:
+- "LAN port 1 link up"
+- "bridge br0 added interface eth0.1"
+
+### Why it matters
+- **Cable connections**: See Ethernet devices connect/disconnect
+- **Network topology**: Track which devices on which ports
+- **Troubleshooting**: Identify physical connection issues
