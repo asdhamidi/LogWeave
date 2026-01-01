@@ -113,7 +113,7 @@ Kafka is intentionally **ephemeral** in this setup:
 
 ---
 
-### 2.4 Kafka UI (Optional)
+### 2.4 Kafka UI
 
 **Container:** `router-kafka-ui`
 
@@ -309,19 +309,7 @@ Kafka + consumers give:
 
 ---
 
-## 9. Non‑Goals
-
-This system is **not**:
-
-- A replacement for ELK
-- A high‑availability Kafka cluster
-- A multi‑tenant SaaS
-
-It is intentionally opinionated and minimal.
-
----
-
-## 10. Summary
+## 9. Summary
 
 This project demonstrates:
 
@@ -330,5 +318,3 @@ This project demonstrates:
 - SQL‑centric analytics
 - Infrastructure‑as‑code dashboards
 - Clean separation between data layers
-
-It is designed to be **understandable, extensible, and realistic** — not over‑engineered, but not toy‑level either.
