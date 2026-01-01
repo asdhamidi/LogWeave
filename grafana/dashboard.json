@@ -1,0 +1,288 @@
+{
+  "dashboard": {
+    "title": "Router Network Dashboard",
+    "tags": ["router", "network", "zte"],
+    "timezone": "browser",
+    "refresh": "30s",
+    "time": {
+      "from": "now-24h",
+      "to": "now"
+    },
+    "panels": [
+      {
+        "id": 1,
+        "title": "WiFi Health Score",
+        "type": "stat",
+        "gridPos": { "x": 0, "y": 0, "w": 6, "h": 4 },
+        "targets": [
+          {
+            "rawSql": "SELECT COALESCE(health_score, 0) as value FROM metrics_wifi_hourly WHERE hour >= NOW() - INTERVAL '1 hour' ORDER BY hour DESC LIMIT 1",
+            "format": "table"
+          }
+        ],
+        "options": {
+          "colorMode": "background",
+          "graphMode": "none",
+          "textMode": "value_and_name"
+        },
+        "fieldConfig": {
+          "defaults": {
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                { "value": 0, "color": "red" },
+                { "value": 50, "color": "yellow" },
+                { "value": 80, "color": "green" }
+              ]
+            },
+            "unit": "none",
+            "decimals": 0
+          }
+        }
+      },
+      {
+        "id": 2,
+        "title": "Active Devices (24h)",
+        "type": "stat",
+        "gridPos": { "x": 6, "y": 0, "w": 6, "h": 4 },
+        "targets": [
+          {
+            "rawSql": "SELECT COUNT(DISTINCT client_mac) as value FROM metrics_device_daily WHERE date >= CURRENT_DATE - INTERVAL '1 day' AND is_active = true",
+            "format": "table"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "color": { "mode": "thresholds" },
+            "thresholds": {
+              "steps": [{ "value": 0, "color": "blue" }]
+            }
+          }
+        }
+      },
+      {
+        "id": 3,
+        "title": "WAN Uptime %",
+        "type": "stat",
+        "gridPos": { "x": 12, "y": 0, "w": 6, "h": 4 },
+        "targets": [
+          {
+            "rawSql": "SELECT CASE WHEN SUM(wan_events) > 0 THEN (SUM(ppp_auth_success)::float / NULLIF(SUM(wan_events), 0) * 100) ELSE 100 END as value FROM metrics_network_hourly WHERE hour >= NOW() - INTERVAL '24 hours'",
+            "format": "table"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "percent",
+            "decimals": 1,
+            "thresholds": {
+              "steps": [
+                { "value": 0, "color": "red" },
+                { "value": 95, "color": "yellow" },
+                { "value": 99, "color": "green" }
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": 4,
+        "title": "Events This Hour",
+        "type": "stat",
+        "gridPos": { "x": 18, "y": 0, "w": 6, "h": 4 },
+        "targets": [
+          {
+            "rawSql": "SELECT COUNT(*) as value FROM raw_logs WHERE timestamp >= DATE_TRUNC('hour', NOW())",
+            "format": "table"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "color": { "mode": "thresholds" },
+            "thresholds": {
+              "steps": [{ "value": 0, "color": "green" }]
+            }
+          }
+        }
+      },
+      {
+        "id": 5,
+        "title": "WiFi Health Timeline (24h)",
+        "type": "timeseries",
+        "gridPos": { "x": 0, "y": 4, "w": 24, "h": 8 },
+        "targets": [
+          {
+            "rawSql": "SELECT hour as time, health_score, total_kickoffs as kickoffs, CASE WHEN btm_reports > 0 THEN (btm_rejections::float / btm_reports * 100) ELSE 0 END as btm_rejection_rate FROM metrics_wifi_hourly WHERE hour >= NOW() - INTERVAL '24 hours' ORDER BY hour",
+            "format": "time_series"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "custom": {
+              "drawStyle": "line",
+              "lineInterpolation": "smooth",
+              "showPoints": "auto",
+              "fillOpacity": 10
+            }
+          },
+          "overrides": [
+            {
+              "matcher": { "id": "byName", "options": "kickoffs" },
+              "properties": [
+                { "id": "custom.axisPlacement", "value": "right" },
+                {
+                  "id": "color",
+                  "value": { "mode": "fixed", "fixedColor": "orange" }
+                }
+              ]
+            }
+          ]
+        },
+        "options": {
+          "legend": { "displayMode": "list", "placement": "bottom" }
+        }
+      },
+      {
+        "id": 6,
+        "title": "Top 10 Problematic Devices",
+        "type": "table",
+        "gridPos": { "x": 0, "y": 12, "w": 14, "h": 8 },
+        "targets": [
+          {
+            "rawSql": "SELECT client_mac as \"MAC Address\", MAX(last_seen) as \"Last Seen\", SUM(total_events) as \"Total Events\", SUM(kickoff_count) as \"Kickoffs\", SUM(disconnect_count) as \"Disconnects\", ROUND(AVG(EXTRACT(EPOCH FROM (last_seen - first_seen)) / 3600), 1) as \"Avg Session (hrs)\" FROM metrics_device_daily WHERE date >= CURRENT_DATE - INTERVAL '7 days' GROUP BY client_mac ORDER BY SUM(kickoff_count) DESC LIMIT 10",
+            "format": "table"
+          }
+        ],
+        "fieldConfig": {
+          "overrides": [
+            {
+              "matcher": { "id": "byName", "options": "Kickoffs" },
+              "properties": [
+                { "id": "custom.displayMode", "value": "color-background" },
+                {
+                  "id": "thresholds",
+                  "value": {
+                    "steps": [
+                      { "value": 0, "color": "green" },
+                      { "value": 10, "color": "yellow" },
+                      { "value": 50, "color": "red" }
+                    ]
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "id": 7,
+        "title": "Event Distribution (24h)",
+        "type": "piechart",
+        "gridPos": { "x": 14, "y": 12, "w": 10, "h": 8 },
+        "targets": [
+          {
+            "rawSql": "SELECT subsystem as metric, COUNT(*) as value FROM raw_logs WHERE timestamp >= NOW() - INTERVAL '24 hours' GROUP BY subsystem ORDER BY value DESC",
+            "format": "table"
+          }
+        ],
+        "options": {
+          "legend": { "displayMode": "list", "placement": "right" },
+          "pieType": "pie",
+          "displayLabels": ["percent"]
+        }
+      },
+      {
+        "id": 8,
+        "title": "DHCP & Device Activity",
+        "type": "timeseries",
+        "gridPos": { "x": 0, "y": 20, "w": 24, "h": 6 },
+        "targets": [
+          {
+            "rawSql": "SELECT hour as time, total_requests as \"DHCP Requests\", total_assignments as \"DHCP Assignments\", unique_devices as \"Active Devices\", new_devices as \"New Devices\" FROM metrics_dhcp_hourly WHERE hour >= NOW() - INTERVAL '24 hours' ORDER BY hour",
+            "format": "time_series"
+          }
+        ],
+        "fieldConfig": {
+          "overrides": [
+            {
+              "matcher": { "id": "byName", "options": "New Devices" },
+              "properties": [
+                { "id": "custom.drawStyle", "value": "bars" },
+                {
+                  "id": "color",
+                  "value": { "mode": "fixed", "fixedColor": "green" }
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "id": 9,
+        "title": "System Health Issues",
+        "type": "timeseries",
+        "gridPos": { "x": 0, "y": 26, "w": 24, "h": 6 },
+        "targets": [
+          {
+            "rawSql": "SELECT hour as time, timeout_count as \"Timeouts\", error_count as \"Errors\", ipv6_errors as \"IPv6 Errors\" FROM metrics_system_hourly WHERE hour >= NOW() - INTERVAL '24 hours' ORDER BY hour",
+            "format": "time_series"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "custom": {
+              "fillOpacity": 70,
+              "stacking": { "mode": "normal" }
+            }
+          }
+        },
+        "options": {
+          "legend": { "displayMode": "list", "placement": "bottom" }
+        }
+      },
+      {
+        "id": 10,
+        "title": "Recent Critical Events",
+        "type": "table",
+        "gridPos": { "x": 0, "y": 32, "w": 24, "h": 8 },
+        "targets": [
+          {
+            "rawSql": "SELECT timestamp as \"Time\", subsystem as \"Subsystem\", event_type as \"Event\", severity as \"Severity\", LEFT(message, 100) as \"Message\" FROM raw_logs WHERE timestamp >= NOW() - INTERVAL '6 hours' AND (severity IN ('err', 'emerg', 'alert', 'crit') OR subsystem = 'auth' OR event_type = 'boot') ORDER BY timestamp DESC LIMIT 50",
+            "format": "table"
+          }
+        ],
+        "fieldConfig": {
+          "overrides": [
+            {
+              "matcher": { "id": "byName", "options": "Severity" },
+              "properties": [
+                { "id": "custom.displayMode", "value": "color-background" },
+                {
+                  "id": "mappings",
+                  "value": [
+                    {
+                      "type": "value",
+                      "options": { "err": { "color": "orange" } }
+                    },
+                    {
+                      "type": "value",
+                      "options": { "emerg": { "color": "red" } }
+                    },
+                    {
+                      "type": "value",
+                      "options": { "alert": { "color": "red" } }
+                    },
+                    {
+                      "type": "value",
+                      "options": { "crit": { "color": "red" } }
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

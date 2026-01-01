@@ -1,0 +1,201 @@
+services:
+  #############################
+  # ZOOKEEPER
+  #############################
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    container_name: router-zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    networks:
+      - router-net
+    restart: unless-stopped
+
+  ############################
+  # KAFKA
+  ############################
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: router-kafka
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+      - "9093:9093"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,PLAINTEXT_HOST://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:9093
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_LOG_RETENTION_HOURS: 168 # 7 days
+      KAFKA_LOG_SEGMENT_BYTES: 1073741824 # 1GB
+      KAFKA_COMPRESSION_TYPE: gzip
+    networks:
+      - router-net
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "kafka-topics",
+          "--bootstrap-server",
+          "localhost:9092",
+          "--list",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  #############################
+  # KAFKA UI (Optional - for debugging)
+  #############################
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: router-kafka-ui
+    depends_on:
+      - kafka
+    ports:
+      - "8080:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: router-cluster
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+      KAFKA_CLUSTERS_0_ZOOKEEPER: zookeeper:2181
+    networks:
+      - router-net
+    restart: unless-stopped
+
+  #############################
+  # PYTHON PRODUCER
+  #############################
+  producer:
+    build:
+      context: ./producer
+      dockerfile: Dockerfile
+    container_name: router-producer
+    ports:
+      - "10514:10514" # Expose TCP port for rsyslog
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      LISTEN_PORT: 10514
+    networks:
+      - router-net
+    depends_on:
+      kafka:
+        condition: service_healthy
+    restart: unless-stopped
+
+  #############################
+  # POSTGRESQL
+  #############################
+  postgres:
+    image: postgres:15-alpine
+    container_name: router-postgres
+    environment:
+      POSTGRES_DB: router_logs
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: admin
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --lc-collate=C --lc-ctype=C"
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - router-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U router -d router_logs"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  #############################
+  # GRAFANA
+  #############################
+  grafana:
+    image: grafana/grafana:latest
+    container_name: router-grafana
+    depends_on:
+      - postgres
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_INSTALL_PLUGINS: grafana-clock-panel
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning
+    networks:
+      - router-net
+    restart: unless-stopped
+
+  #############################
+  # CONSUMER: RAW ARCHIVER
+  #############################
+  consumer-raw:
+    build:
+      context: ./consumers/raw-archiver
+      dockerfile: Dockerfile
+    container_name: router-consumer-raw
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      POSTGRES_HOST: postgres
+      POSTGRES_DB: router_logs
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: admin
+      CONSUMER_GROUP_ID: raw-archiver
+    networks:
+      - router-net
+    restart: unless-stopped
+
+  #############################
+  # CONSUMER: METRICS PROCESSOR
+  #############################
+  consumer-metrics:
+    build:
+      context: ./consumers/metrics-processor
+      dockerfile: Dockerfile
+    container_name: router-consumer-metrics
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      POSTGRES_HOST: postgres
+      POSTGRES_DB: router_logs
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: admin
+      CONSUMER_GROUP_ID: metrics-processor
+    networks:
+      - router-net
+    restart: unless-stopped
+
+#############################
+# NETWORKS
+#############################
+networks:
+  router-net:
+    driver: bridge
+
+#############################
+# VOLUMES
+#############################
+volumes:
+  postgres_data:
+    driver: local
+  grafana_data:
+    driver: local
