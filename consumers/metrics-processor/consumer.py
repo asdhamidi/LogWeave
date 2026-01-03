@@ -8,14 +8,16 @@ import json
 import logging
 import os
 import re
+import signal
 import sys
 import time
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime
+from typing import Any, DefaultDict, Dict, Optional, Set
 
 import psycopg2
 from kafka import KafkaConsumer
-from psycopg2.extras import execute_values
+from psycopg2.extensions import connection
 
 # Configure logging
 logging.basicConfig(
@@ -52,42 +54,47 @@ class MetricsProcessor:
         }
 
         # In-memory accumulators (per hour)
+        self.running = True
         self.current_hour = None
-        self.wifi_metrics = defaultdict(lambda: {
+        self.wifi_metrics: DefaultDict[Any, Dict[str, Any]] = defaultdict(lambda: {
             'kickoffs': 0,
             'clients': set(),
             'btm_reports': 0,
             'btm_rejections': 0,
             'sta_leaves': 0
         })
-        self.dhcp_metrics = defaultdict(lambda: {
+        self.dhcp_metrics: DefaultDict[Any, Dict[str, Any]] = defaultdict(lambda: {
             'requests': 0,
             'assignments': 0,
             'clients': set(),
             'new_clients': set()
         })
-        self.wan_metrics = defaultdict(lambda: {
+        self.wan_metrics: DefaultDict[Any, Dict[str, int]] = defaultdict(lambda: {
             'events': 0,
             'auth_success': 0,
             'auth_fail': 0,
             'link_up': 0
         })
-        self.system_metrics = defaultdict(lambda: {
+        self.system_metrics: DefaultDict[Any, Dict[str, int]] = defaultdict(lambda: {
             'timeouts': 0,
             'errors': 0,
             'ipv6_errors': 0
         })
 
         # Device tracking (daily)
-        self.device_daily = defaultdict(lambda: {
+        self.device_daily: DefaultDict[Any, Dict[str, Any]] = defaultdict(lambda: {
             'first_seen': None,
             'last_seen': None,
             'events': 0,
             'kickoffs': 0
         })
 
-        self.consumer = None
-        self.db_conn = None
+        self.consumer : KafkaConsumer = None
+        self.db_conn: Optional[connection] = None
+
+        # Signal handlers for graceful shutdown
+        signal.signal(signal.SIGINT, self.handle_exit)
+        signal.signal(signal.SIGTERM, self.handle_exit)
 
     def connect_kafka(self):
         """Connect to Kafka"""
@@ -266,6 +273,9 @@ class MetricsProcessor:
             return
 
         try:
+            if self.db_conn.closed:
+                self.connect_postgres()
+
             cursor = self.db_conn.cursor()
 
             # WiFi metrics
@@ -450,39 +460,38 @@ class MetricsProcessor:
         logger.info("Consumer ready, processing messages...")
 
         try:
-            message_count = 0
-            for message in self.consumer:
-                self.process_message(message)
-                message_count += 1
-
-                # Commit every 100 messages
-                if message_count % 100 == 0:
+            while self.running:
+                messages = self.consumer.poll(timeout_ms=1000)
+                for tp, msgs in messages.items():
+                    for message in msgs:
+                        self.process_message(message)
                     self.consumer.commit()
-
-        except KeyboardInterrupt:
-            logger.info("Received interrupt signal")
         except Exception as e:
             logger.error(f"Fatal error: {e}", exc_info=True)
-            raise
         finally:
             self.cleanup()
 
-    def cleanup(self):
-        """Clean shutdown"""
-        logger.info("Shutting down metrics processor...")
+    def handle_exit(self, signum, frame):
+        """Handle exit signals by setting running to False"""
+        logger.info(f"Received signal {signum}. Starting graceful shutdown...")
+        self.running = False
 
-        # Flush any remaining metrics
+    def cleanup(self):
+        """Clean shutdown - now called automatically on container stop"""
+        logger.info("Final flush of metrics before exit...")
+
+        # Flush remaining metrics
         if self.current_hour:
             self.flush_hourly_metrics(self.current_hour)
             self.flush_daily_device_metrics(self.current_hour.date())
 
-        # Close connections
         if self.consumer:
             self.consumer.close()
+
         if self.db_conn:
             self.db_conn.close()
 
-        logger.info("Metrics processor shutdown complete")
+        logger.info("Graceful shutdown complete.")
 
 
 def main():

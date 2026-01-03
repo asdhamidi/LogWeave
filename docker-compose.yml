@@ -103,6 +103,7 @@ services:
     ports:
       - "5432:5432"
     volumes:
+      - ./data/postgres:/var/lib/postgresql/data
       - postgres_data:/var/lib/postgresql/data
       - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
     networks:
@@ -130,7 +131,6 @@ services:
       GF_INSTALL_PLUGINS: grafana-clock-panel
       GF_USERS_ALLOW_SIGN_UP: "false"
     volumes:
-      - grafana_data:/var/lib/grafana
       - ./grafana/provisioning:/etc/grafana/provisioning
     networks:
       - router-net
